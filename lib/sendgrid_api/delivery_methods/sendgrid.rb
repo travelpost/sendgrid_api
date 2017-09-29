@@ -1,5 +1,6 @@
 begin
   require 'mail/check_delivery_params'
+  require 'sendgrid_api/mail_part'
 rescue LoadError
 end
 
@@ -19,6 +20,8 @@ module Mail
     end
 
     def deliver!(mail)
+      text_body = nil
+      html_body = nil
       check_delivery_params(mail)
 
       # Extract the recipients, allows array of strings, array of addresses or comma separated string
@@ -43,6 +46,14 @@ module Mail
       xsmtp = parse_xsmtpapi_headers(mail)
       @mailer = SendgridApi::Mail.new(@client, xsmtp: xsmtp)
 
+      if(check_content_type('text', mail))
+        text_body = mail.body
+      end
+
+      if(check_content_type('html', mail))
+        html_body = mail.body
+      end
+
       # Pass everything through, .queue will remove nils
       result = @mailer.queue(
         to:       to.collect(&:address),
@@ -51,13 +62,21 @@ module Mail
         fromname: from.display_name,
         bcc:      bcc,
         subject:  mail.subject,
-        text:     mail.text_part.to_s.length > 0 && mail.text_part.body,
-        html:     mail.html_part.to_s.length > 0 && mail.html_part.body,
+        text:     (mail.text_part.to_s.length > 0 && mail.text_part.body) || text_body,
+        html:     (mail.html_part.to_s.length > 0 && mail.html_part.body) || html_body,
         headers:  header_to_hash(mail).to_json
       )
       raise SendgridApi::Error::DeliveryError.new(result.message) if result.error?
       return result
-    end
+      end
+
+      def check_content_type(value, mail)
+        if(mail.content_type.include?(value))
+          true
+        else
+          false
+        end
+      end
 
     # Simple check of required Mail params if superclass doesn't exist from 2.5.0
     # @param [Mail] mail
@@ -67,7 +86,7 @@ module Mail
         super
       else
         blank = proc { |t| t.nil? || t.empty? }
-        if [mail.from, mail.to].any?(&blank) || [mail.html_part, mail.text_part].all?(&blank)
+        if [mail.from, mail.to].any?(&blank) || [mail.text_part, mail.html_part, mail.body].all?(&blank)
           raise ArgumentError.new("Missing required mail part")
         end
       end
